@@ -77,13 +77,11 @@ def test_bloqueio_apos_falhas(ctx):
 
 
 def test_prazos_pos_venda_calculados_em_codigo(ctx):
-    # hoje = 2026-02-20; pedido 7 previsto para 2026-02-17 => 3 dias
     j = tools.consultar_pedido(ctx, 7, "leticia.rocha@jmail.com")["prazos_pos_venda"]
-    assert j["dias_desde_recebimento"] == 3 and j["dentro_prazo_arrependimento_7_dias"]
-    # pedido 6 previsto para 2026-02-01 => 19 dias: fora do arrependimento, dentro da troca por defeito
-    j = tools.consultar_pedido(ctx, 6, "gabriel.araujo@jmail.com")["prazos_pos_venda"]
-    assert j["dias_desde_recebimento"] == 19
-    assert not j["dentro_prazo_arrependimento_7_dias"] and j["dentro_prazo_troca_defeito_30_dias"]
+    assert j["dentro_prazo_arrependimento_7_dias"] is None
+    assert j["dentro_garantia_legal_90_dias"] is None
+    assert "data real de recebimento" in j["dados_faltantes"]
+    assert "dias_desde_recebimento" not in j
 
 
 def test_pedido_cancelado_e_pendente(ctx):

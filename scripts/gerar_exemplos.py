@@ -31,7 +31,7 @@ CENARIOS = [
     ("03_arrependimento_pedido", "Devolução por arrependimento (pedido + política + encaminhamento)", "2026-02-20T10:00:00",
      ["Me arrependi da minha compra, posso devolver meu pedido?",
       "É o pedido 7, meu e-mail é leticia.rocha@jmail.com",
-      "Quero sim, pode abrir a devolução. Meu nome é Letícia."]),
+      "Comprei online e recebi em 17/02/2026. Está lacrado. Pode registrar a solicitação?"]),
     ("04_sem_estoque_e_promocao_vencida", "Produto sem estoque e promoção que não está mais ativa", "2026-02-20T10:00:00",
      ["Quero comprar o violão Giannini GF-3D",
       "Mas eu vi que tava com 40% de desconto na Semana do Músico, ainda vale?"]),
@@ -46,7 +46,7 @@ CENARIOS = [
 def rodar(arquivo: str, titulo: str, agora: str, falas: list[str]) -> str:
     import anthropic
 
-    from emporio.agent import Agente
+    from emporio.agent import Agente, MSG_ERRO, MSG_LIMITE
 
     os.environ["EMPORIO_NOW"] = agora
     linhas = [f"# {titulo}", "", f"_Data simulada no sistema: {agora.replace('T', ' ')}. "
@@ -61,6 +61,8 @@ def rodar(arquivo: str, titulo: str, agora: str, falas: list[str]) -> str:
     for fala in falas:
         linhas += [f"**Cliente:** {fala}", ""]
         resposta = agente.responder(fala)
+        if resposta in (MSG_ERRO, MSG_LIMITE):
+            raise RuntimeError("Conversa não concluída. Confira chave, modelo e saldo; arquivo não será gravado.")
         linhas += [f"**Bia:** {resposta}", ""]
     return "\n".join(linhas)
 
@@ -73,6 +75,11 @@ def main() -> int:
     if not os.getenv("ANTHROPIC_API_KEY"):
         print("Defina ANTHROPIC_API_KEY (veja .env.example).", file=sys.stderr)
         return 1
+    if not os.getenv("EMPORIO_MODEL"):
+        print("Defina EMPORIO_MODEL no .env.", file=sys.stderr)
+        return 1
+    if args.only is not None and not 1 <= args.only <= 5:
+        ap.error("--only deve estar entre 1 e 5")
     saida = RAIZ / "examples"
     saida.mkdir(exist_ok=True)
     for i, (arq, titulo, agora, falas) in enumerate(CENARIOS, 1):

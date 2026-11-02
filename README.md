@@ -1,141 +1,134 @@
-# Bia, atendente virtual da Empório da Música
+# Bia — Empório da Música
 
-Protótipo de agente de atendimento por mensagem de texto para a Empório da Música (loja fictícia de instrumentos em Campo Grande/MS), feito para o Desafio Técnico de AI Engineer da Artefact. A Bia responde dúvidas sobre produtos, preços, estoque, promoções, pedidos e políticas da loja, consultando os dados em tempo real em vez de "lembrar" ou inventar.
+Agente Python para o desafio AI Engineer da Artefact. Atende por texto no terminal, com persona informal/profissional, ferramentas para dados estruturados e busca de políticas por seção.
 
-## Como rodar
+## Estado da entrega
 
-Requisitos: Python 3.11+ e uma chave da API da Anthropic.
+Código e testes locais incluídos. As cinco conversas em `examples/` são **ilustrativas**, não transcrições do LLM. A execução com API real e a publicação no GitHub ainda precisam ser feitas pelo candidato. O script `scripts/gerar_exemplos.py` grava cinco conversas reais; não grava um cenário que termina em falha técnica. Revise as respostas antes da entrega.
 
-```bash
-git clone <url-do-repositorio> && cd emporio-agent
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env        # edite e coloque sua ANTHROPIC_API_KEY
-python -m emporio            # abre o chat no terminal
+## Instalação no Windows (PowerShell)
+
+Extraia o ZIP, abra a pasta `emporio-final` no VS Code e abra o terminal nessa pasta. Requer Python 3.11+ e Git para publicar.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+Copy-Item .env.example .env
 ```
 
-Opções do chat: `--session ID` retoma uma conversa salva, `--verbose` mostra quais ferramentas o agente chamou e o que elas devolveram, `--model` troca o modelo. Dentro do chat: `/novo` começa outra conversa e `/sair` encerra.
+Abra `.env` no editor e preencha:
 
-Testes (não precisam de chave nem de internet, o modelo é simulado):
-
-```bash
-pytest
+```dotenv
+ANTHROPIC_API_KEY=sua_chave_da_api
+EMPORIO_MODEL=id_exato_do_modelo_disponivel_na_sua_conta
 ```
 
-Conversas de exemplo (rodam o agente de verdade, precisam da chave):
+Use um modelo Anthropic que aceite ferramentas. O ID é obrigatório e não possui fallback silencioso. A disponibilidade deve ser conferida na sua conta; é necessário acesso e saldo/limite da API. Não envie a chave ao GitHub nem a inclua em capturas de tela.
 
-```bash
-python scripts/gerar_exemplos.py          # regrava examples/*.md
+```powershell
+# Testar sem chamar o modelo
+.venv\Scripts\python.exe -m pytest -q
+# Conversar
+.venv\Scripts\python.exe -m emporio
+# Ver as chamadas de ferramentas durante uma demonstração
+.venv\Scripts\python.exe -m emporio --verbose
+# Retomar uma sessão específica
+.venv\Scripts\python.exe -m emporio --session minha-demo
+# Gerar as cinco conversas REAIS exigidas para entregar
+.venv\Scripts\python.exe scripts/gerar_exemplos.py
 ```
 
-Variáveis opcionais: `EMPORIO_MODEL` (padrão `claude-haiku-5-5`) e `EMPORIO_NOW` (fixa a "data de hoje", útil para demonstrar prazos de devolução com os pedidos de 2026 do CSV).
+`/sair` encerra; `/novo` inicia outra sessão. CLI foi escolhida porque o desafio aceita terminal e prioriza a lógica do agente. Não há necessidade de abrir navegador.
 
-## Estrutura
+Linux/macOS: use `.venv/bin/python` nos comandos e `cp .env.example .env`.
 
-```
-data/                 CSVs originais, PDF original e politicas.md (transcrição do PDF, dividida em seções)
-src/emporio/
-  data.py             carga e tratamento dos CSVs
-  policies.py         recuperação de trechos do manual de políticas
-  tools.py            ferramentas (function calling) e seus schemas
-  prompts.py          persona, regras e contexto de data/hora
-  agent.py            loop mensagem -> modelo -> ferramentas -> resposta
-  storage.py          histórico por sessão (JSON)
-  cli.py              interface de terminal
-tests/                43 testes (dados, ferramentas, recuperação, loop do agente)
-scripts/              gerador das conversas de exemplo
-examples/             conversas de exemplo
-```
+## Como funciona
+
+1. A CLI recebe a mensagem e carrega o histórico da sessão.
+2. O modelo recebe persona, regras, ferramentas e contexto temporal.
+3. O modelo solicita uma ou mais ferramentas; Python consulta os dados ou calcula valores.
+4. O resultado volta ao modelo para redigir a resposta.
+5. O histórico é salvo localmente. O loop tem limite de seis rodadas e desfaz o turno incompleto em falha de API.
+
+Arquivos principais:
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `src/emporio/agent.py` | Loop de chamadas ao modelo e ferramentas |
+| `src/emporio/tools.py` | Produtos, pedidos, promoções, políticas, cálculos e registro local |
+| `src/emporio/data.py` | Carga dos CSVs e tratamento dos campos |
+| `src/emporio/policies.py` | Busca lexical nas seções do manual |
+| `src/emporio/prompts.py` | Persona, escopo e regras de comportamento |
+| `src/emporio/storage.py` | Persistência JSON por sessão |
+| `src/emporio/config.py` | Configuração carregada após o `.env` |
 
 ## Decisões técnicas
 
-### Abordagem: function calling com poucas ferramentas específicas
+**Function calling:** ferramentas específicas limitam o acesso aos dados e simplificam testes. Não executamos SQL ou código escrito pelo modelo. Não foi necessário LangChain ou um framework de agentes para este loop.
 
-O modelo decide qual ferramenta chamar e escreve a resposta. Tudo que é fato (preço, estoque, status do pedido, prazo, conta de parcela) sai de código determinístico, não do modelo.
+**Provedor:** API Anthropic por SDK. O modelo é escolhido explicitamente por `EMPORIO_MODEL`; a escolha final e a qualidade precisam ser validadas com as conversas reais. Não houve benchmark de custo/latência. O prompt estático usa cache e o relógio fica em bloco separado.
 
-Por que não um agente de SQL: os dados são pequenos (65 produtos, 20 pedidos) e as perguntas dos clientes se repetem em poucos formatos. Ferramentas com parâmetros claros (categoria, faixa de preço, número do pedido) são mais previsíveis, mais fáceis de testar e não dão ao modelo acesso a dados que ele não deveria ver, como a tabela inteira de clientes. Um agente de SQL também aumentaria o risco de um cliente conseguir dados de outro por prompt injection.
+**Retrieval:** o PDF original acompanha `data/politicas.md`, uma transcrição dividida em seções. Ranking lexical com normalização, stemming simples, sinônimos e peso de título. Para oito páginas, evita embeddings e infraestrutura adicional. Não é busca semântica; paráfrases podem falhar. Seções internas 7 e 10 são excluídas da busca e suas diretrizes relevantes estão no prompt.
 
-Por que não ReAct puro com um prompt grande: o function calling nativo do Claude já faz o raciocínio entre chamadas e devolve erro estruturado quando algo falha, sem eu precisar parsear texto.
+**Dados:** CSVs carregados em memória. São um snapshot do desafio, não estoque conectado em tempo real. `specs` é convertido de JSON. Produto vendável exige status ativo e estoque positivo. Promoção usa `is_active`; se houver várias ativas, escolhe a maior sem acumular. PIX não acumula com promoção. Preço máximo filtra o preço atual antes do PIX.
 
-Ferramentas: `buscar_produtos`, `listar_promocoes`, `consultar_pedido`, `consultar_politicas`, `calcular_parcelamento`, `calcular_frete`, `encaminhar_para_atendente`.
+**Pedidos:** consulta exige número e e-mail/telefone compatível. Retorna primeiro nome e campos do pedido, sem expor cadastro completo. Falhas de verificação têm resposta genérica e bloqueio após três tentativas na mesma sessão. Isso é validação demonstrativa, não autenticação segura; nova sessão pode contornar o limite.
 
-### Dados x políticas: quando consultar cada um
+**Pós-venda:** a previsão de entrega nunca é usada como recebimento efetivo. Canal da compra e data real precisam ser perguntados. A ferramenta calcula a janela interna de troca por defeito desde a compra; não conclui automaticamente arrependimento nem garantia. O agente não aprova reembolso ou devolução.
 
-- Fatos que mudam (preço, estoque, promoção, pedido) vêm sempre de ferramenta de dados. O prompt proíbe responder sobre isso sem consultar, o que também segue o manual da loja (seção 7.1).
-- Regras e prazos (troca, garantia, pagamento, frete, LGPD) vêm de `consultar_politicas`.
-- Endereço, telefone e horário ficam fixos no prompt, porque são pedidos o tempo todo e quase nunca mudam. Ainda assim, o horário atual e se a loja está aberta agora são calculados em código e injetados a cada mensagem, para o modelo não errar dia da semana.
-- Perguntas que combinam as duas fontes funcionam em várias chamadas. Exemplo: devolução usa `consultar_pedido` (que já calcula se está dentro dos 7, 30 e 90 dias) mais `consultar_politicas` (a regra).
+**Histórico:** JSON local por sessão, com escrita atômica e janela de contexto de 40 mensagens sem cortar pares de ferramentas. Persistência contém o texto informado pelo cliente e resultados; usar somente dados fictícios na demonstração e apagar sessões quando não forem mais necessárias.
 
-### Recuperação das políticas: busca lexical por seção, sem embeddings
+## Ambiguidades e suposições
 
-O manual tem 8 páginas. Dividi por seção e subseção (cada uma é uma regra completa) e ranqueio por sobreposição de palavras, com normalização de acentos, um stemming mínimo, peso extra para termos no título e um pequeno dicionário de sinônimos do domínio ("me arrependi" leva a 4.1, "quebrou" leva a defeito e garantia). Os testes cobrem 9 perguntas típicas.
+- Promoções não têm datas: somente `is_active` determina vigência.
+- Produto descontinuado ou em breve pode ter estoque positivo: o status prevalece.
+- Total de pedido é preservado mesmo quando diverge da soma dos itens.
+- Parcelamento segue seção 3.1: mínimo de R$50 até 3x, R$80 de 4x a 6x e R$100 de 7x a 12x. Essa é uma interpretação documentada da ambiguidade com a tabela geral.
+- Frete regional considera Campo Grande, pois o manual não lista municípios. Exatamente R$500 foi interpretado como frete de R$35; acima disso, grátis. Confirmar essas suposições com o negócio em produção.
+- Contatos divergentes no manual: adotados telefone (67) 3341-4444 e e-mail sem acento. A divergência deve ser confirmada com a loja.
+- Feriados não estão cadastrados; horário calculado é o regular, sujeito a feriados e exceções.
+- Encaminhamento gera protocolo em arquivo local, sem notificação à equipe. A resposta deve identificar a simulação e não prometer retorno efetivo.
 
-Embeddings seriam exagero aqui: adicionam dependência, custo e não determinismo para um corpus que cabe em poucas centenas de palavras por seção. Para um manual 50 vezes maior eu migraria para embeddings com busca híbrida. As seções 7 e 10 (diretrizes internas para a equipe) não são indexadas, porque já estão incorporadas ao prompt e o cliente não precisa ver "consulte a gerência".
+## Exemplos e validação
 
-### Modelo e provedor: Claude Haiku 5.5 via API da Anthropic
+Os cinco cenários cobrem catálogo, informações/preço, arrependimento, falta de estoque/promoção inativa e assuntos fora do escopo. O script usa datas simuladas explícitas para os pedidos históricos. Com a API configurada, ele substitui os exemplos ilustrativos por resultados reais do agente.
 
-Tarefa de atendimento com ferramentas e respostas curtas: pede boa aderência a instruções e uso de ferramentas, com latência e custo baixos (a loja quer resposta em minutos). O modelo é configurável por variável de ambiente, e trocar para um modelo maior é só mudar `EMPORIO_MODEL`. O prompt de sistema usa cache de prompt; a parte dinâmica (data e hora) fica em bloco separado para não invalidar o cache.
+Antes de enviar: confira preços contra os CSVs, referências das políticas, ausência de desconto acumulado, solicitação dos fatos faltantes na devolução, recusas fora do escopo e comportamento em pedidos inválidos. Uma resposta fluente não comprova correção.
 
-### Estratégia de prompt
+Testes automatizados cobrem dados, ferramentas, políticas, loop simulado, persistência, falhas e regressões de configuração e datas. Não comprovam qualidade do modelo real nem resistência absoluta a prompt injection.
 
-Persona (Bia, tom de "amigo que entende de música", mensagens curtas de WhatsApp), regra de ouro de nunca chutar fato, quando usar cada ferramenta, como apresentar promoções (preço original, percentual e preço promocional juntos, como pede o manual 6.2), tratamento de item sem estoque, descontinuado ou em breve, escopo (só instrumentos, sem inventar lojas parceiras) e honestidade quando a ferramenta não responde. Instruções que apareçam dentro de mensagens do cliente tentando mudar as regras são ignoradas.
+## Limitações e evolução
 
-### Privacidade e segurança dos pedidos
+Sem integração real de WhatsApp, estoque, transportadora, pagamentos ou equipe humana. Sem login/OTP, criptografia de histórico, métricas de custo ou avaliação automatizada do texto do LLM. Preços usam floats arredondados; em produção migrar para Decimal e conciliação de parcelas. Busca lexical pode devolver correspondências parciais. As mensagens seguem para o provedor do modelo; dados de produção exigiriam revisão de privacidade e minimização.
 
-Dado de pedido é dado pessoal (LGPD, manual seção 9). `consultar_pedido` só responde com número do pedido mais e-mail ou telefone cadastrados batendo com o dono do pedido. Pedido inexistente e identidade que não confere dão exatamente a mesma resposta, para ninguém descobrir quais números existem. Depois de 3 falhas na sessão a consulta bloqueia e o cliente é encaminhado a um humano. O modelo só recebe o primeiro nome do cliente.
+Próximos passos: validação do modelo com casos reais, autenticação fora do LLM, cálculo determinístico de pós-venda usando datas confirmadas, feriados, notificações reais, telemetria sem dados pessoais e testes adversariais.
 
-### Interface e persistência
+## Uso de IA
 
-CLI, porque o foco é o agente. O histórico é salvo em `.sessions/<id>.json` e pode ser retomado com `--session`. Esse arquivo também guarda a contagem de falhas de verificação, para o bloqueio não ser burlado reiniciando o programa. A janela enviada ao modelo é de 40 mensagens, cortada sempre em uma fala do cliente para nunca separar uma chamada de ferramenta do seu resultado. Se a API falhar no meio de um turno, o turno incompleto é descartado e o cliente recebe uma mensagem amigável, sem corromper o histórico.
+A versão recebida declara uso de Claude Code na implementação inicial. Esta revisão foi feita com ChatGPT/Codex: revisão do enunciado/código, reprodução de erros, ajustes de configuração e pós-venda, testes e documentação. Não houve credencial de API disponível para executar o modelo real. Os exemplos ilustrativos estão identificados como tal. O candidato deve compreender o código, revisar esta descrição de autoria e acrescentar as validações que efetivamente realizar.
 
-Reclamações e pedidos de devolução, troca ou garantia viram um registro em `.sessions/encaminhamentos.jsonl` com protocolo, e o cliente é avisado do retorno em até 24 horas úteis (manual 7.3). A Bia não aprova nem executa devoluções.
+## Publicação e entrega
 
-## Tratamento dos dados e suposições
+O ZIP inclui o histórico Git recebido e um commit adicional de revisão, sem reescrever os anteriores. Crie um repositório público vazio no GitHub, sem README automático. Dentro desta pasta:
 
-Inconsistências que encontrei nos dados e como tratei:
+```powershell
+git status
+git log --oneline
+git remote -v
+```
 
-| Situação | Tratamento |
-|---|---|
-| Produto 136 (Ibanez Bass 2X) está `discontinued` mas tem 13 em estoque | Só é vendável se `status == active` e estoque maior que zero. O status manda. |
-| Produto 130 (Kala KA-ABP-CTG) está `coming_soon` com 2 em estoque, e já aparece em pedidos | Tratado como "em breve", sem confirmar disponibilidade. Vale confirmar com a loja. |
-| Produto 96 está `active` com estoque 0 | "Sem estoque" e a ferramenta devolve alternativas parecidas em categoria e preço (manual 7.3). |
-| Promoções sem data de vigência; várias do mesmo produto | Vale só `is_active = 1`. Se houver mais de uma ativa, usa a maior. O CSV hoje tem no máximo uma ativa por produto. |
-| Pedidos 3 e 20: total menor que a soma dos itens | Mantido o total do pedido (provavelmente desconto). O agente informa o total registrado. |
-| Pedidos 9, 16 e 18 parcelados com parcela abaixo do mínimo do manual (6x ou 12x) | Dados históricos, não afetam o agente. Anotado como inconsistência. |
-| Categorias 6, 7 e 8 (sopros e cordas orquestrais) não têm nenhum produto, apesar de o manual citar esses instrumentos | O agente diz que não encontrou no catálogo agora e oferece encaminhar. |
-| Ibanez Bass 2X custa R$ 441 e os outros baixos passam de R$ 7 mil | Possível erro de cadastro. Como está descontinuado, não aparece como vendável. |
-| Telefone: o manual traz (67) 3341-4444 (capa e dados da empresa) e (67) 3321-4500 (seção 7). E-mail com e sem acento no domínio | Usei (67) 3341-4444 e `contato@emporiodamusica.com.br`. A divergência deve ser confirmada com a loja. |
+Se não houver `origin`:
 
-Suposições (todas fáceis de mudar em `tools.py`):
+```powershell
+git remote add origin https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
+```
 
-- "Região metropolitana de Campo Grande" é tratada como o município de Campo Grande, porque o manual não lista cidades.
-- Parcelamento: o manual diz "até 3x sem valor mínimo (exceto abaixo de R$ 50,00)" e, na tabela, "parcela mínima de R$ 100". Segui a seção 3.1: parcela mínima de R$ 50 até 3x, R$ 80 de 4x a 6x e R$ 100 de 7x a 12x. O pedido 7 do CSV (R$ 159,90 em 3x) é compatível com essa leitura.
-- Frete grátis "acima de R$ 500": R$ 500,00 exatos pagam a taxa de R$ 35.
-- Todos os pedidos do CSV são tratados como compras online/à distância, então o direito de arrependimento de 7 dias se aplica. O CSV não tem canal de venda.
-- O CSV não tem a data real de recebimento. Uso `estimated_delivery` como data de recebimento dos pedidos `delivered` para contar os 7, 30 e 90 dias, e o agente é instruído (via a própria ferramenta) a deixar isso claro.
-- A "data de hoje" é a do relógio real. Os pedidos do CSV são de out/2025 a mar/2026, então hoje quase todos os entregues já passaram dos prazos. Por isso os exemplos usam `EMPORIO_NOW` para simular uma data próxima das entregas.
-- Feriados não são conhecidos. O sistema só considera a loja fechada em domingo ou quando o cliente cita o feriado.
-- O desconto de PIX de 5% aparece só para itens sem promoção ativa (manual 6.2).
+Se já houver `origin`, use `git remote set-url origin URL_DO_SEU_REPOSITORIO`. Depois de gerar e revisar as conversas reais:
 
-## Limitações conhecidas
+```powershell
+git add examples README.md
+git commit -m "Valida agente com modelo real e registra conversas"
+git push -u origin main
+```
 
-- Os dados são lidos de CSVs na inicialização. Em produção seriam consultas ao banco da loja, e o estoque mudaria entre uma pergunta e outra.
-- Não há cotação real de frete para fora de Campo Grande (depende de CEP, peso e dimensões); o agente informa só os prazos do manual.
-- A Bia não abre devolução nem altera pedido: registra o caso e promete retorno humano. Não há integração real com WhatsApp nem notificação da equipe; o encaminhamento é um arquivo.
-- A verificação de identidade por e-mail ou telefone é simples. Em produção ela usaria o próprio número do WhatsApp do cliente ou um código enviado ao e-mail.
-- A recuperação lexical pode falhar com paráfrases que não estão no dicionário de sinônimos. Há fallback: se nada casar, a ferramenta diz isso e o agente encaminha em vez de inventar.
-- Sem avaliação automática da qualidade das respostas do LLM. Os testes cobrem ferramentas, dados e o loop do agente com modelo simulado, não o texto que o modelo escreve.
-- A busca de produtos é por palavras (nome, categoria, descrição, especificações). Perguntas muito abertas ("o melhor violão pra quem toca jazz") dependem do modelo interpretar as especificações retornadas.
-- Provedor único (Anthropic). Um adaptador para outro provedor exigiria trocar `agent.py` e o formato dos schemas.
-
-### O que eu faria com mais tempo
-
-- Um conjunto de avaliação com perguntas e respostas esperadas, rodando contra o modelo real (por exemplo, checando se preço e estoque citados batem com os CSVs).
-- Interface de WhatsApp (webhook em FastAPI) e uso do número do cliente na verificação.
-- Estoque e pedidos em PostgreSQL, e embeddings com busca híbrida se o manual crescer.
-- Cotação de frete via API dos Correios e envio do encaminhamento para a equipe (e-mail ou Slack).
-- Respostas em streaming e métricas de custo por conversa.
-
-## Uso de assistentes de código
-
-Usei o Claude Code (Claude Sonnet 5.5) como par de programação. Fluxo: li o enunciado e os dados, e pedi ao Claude para analisar os CSVs e o PDF e levantar as inconsistências (tabela acima), depois discuti a arquitetura (function calling x agente de SQL, busca lexical x embeddings) e ele implementou os módulos em etapas, com commits separados. Eu revisei as decisões e as suposições listadas aqui. Os testes foram escritos junto com o código e rodados a cada etapa. Não havia chave de API no ambiente em que o código foi construído, então os testes usam um cliente simulado e as conversas de exemplo foram geradas depois, rodando o agente real com `scripts/gerar_exemplos.py`.
+Não publique `.env` ou `.sessions`. Confira no GitHub se há 3–5 conversas reais, instruções completas e histórico. Responda ao e-mail do processo com o link público antes do prazo indicado nele; não altere o repositório após a entrega. O ZIP é o pacote de trabalho, não substitui o repositório solicitado.

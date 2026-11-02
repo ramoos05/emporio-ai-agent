@@ -139,16 +139,16 @@ def listar_promocoes(ctx: Contexto) -> dict:
 # --------------------------------------------------------------------------- pedidos
 def _janelas(pedido, hoje) -> dict | None:
     """Prazos de devolução/garantia calculados em código (LLMs erram conta de data)."""
-    if pedido.status != "delivered" or not pedido.previsao_entrega:
+    if pedido.status != "delivered":
         return None
-    dias = (hoje - pedido.previsao_entrega).days
+    dias_compra = (hoje - pedido.data).days
     return {
-        "referencia": "previsão de entrega (a data real de recebimento não é registrada no sistema)",
-        "data_referencia": pedido.previsao_entrega.isoformat(),
-        "dias_desde_recebimento": dias,
-        "dentro_prazo_arrependimento_7_dias": dias <= 7,
-        "dentro_prazo_troca_defeito_30_dias": dias <= 30,
-        "dentro_garantia_legal_90_dias": dias <= 90,
+        "dias_desde_compra": dias_compra,
+        "dentro_prazo_troca_defeito_30_dias": 0 <= dias_compra <= 30,
+        "dentro_prazo_arrependimento_7_dias": None,
+        "dentro_garantia_legal_90_dias": None,
+        "dados_faltantes": ["canal da compra", "data real de recebimento"],
+        "orientacao": "Pergunte ao cliente esses dados. Previsão de entrega não comprova recebimento. Não aprove nem negue devolução com base na previsão."
     }
 
 
@@ -253,8 +253,8 @@ def encaminhar_para_atendente(ctx: Contexto, motivo: str, resumo: str, nome: str
     config.HANDOFF_FILE.parent.mkdir(parents=True, exist_ok=True)
     with config.HANDOFF_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(registro, ensure_ascii=False) + "\n")
-    return {"protocolo": protocolo, "retorno": "até 24 horas úteis",
-            "mensagem": "Atendimento registrado. Informe o protocolo ao cliente."}
+    return {"protocolo": protocolo, "simulacao": True,
+            "mensagem": "Registro local de demonstração criado. Não houve envio à equipe. Informe isso e oriente contato direto com a loja, sem prometer retorno."}
 
 
 # --------------------------------------------------------------------------- registro
@@ -275,7 +275,7 @@ def executar(ctx: Contexto, nome: str, argumentos: dict) -> dict:
         return {"erro": f"ferramenta desconhecida: {nome}"}
     try:
         return fn(ctx, **(argumentos or {}))
-    except TypeError as e:
+    except (TypeError, ValueError, OverflowError) as e:
         return {"erro": f"argumentos inválidos: {e}"}
 
 
@@ -284,7 +284,7 @@ def schemas(categorias: list[str]) -> list[dict]:
         {
             "name": "buscar_produtos",
             "description": (
-                "Consulta o catálogo em tempo real: preço, estoque, situação (disponível, sem estoque, descontinuado, "
+                "Consulta o snapshot local do catálogo: preço, estoque, situação (disponível, sem estoque, descontinuado, "
                 "em breve), promoção ativa e especificações. Use SEMPRE antes de falar de preço, disponibilidade ou "
                 "características de qualquer instrumento. Para itens indisponíveis já retorna alternativas. "
                 "Use `categoria` para tipo de instrumento e `consulta` para marca/modelo/características (ex.: 'Takamine GD20', 'nylon')."),
@@ -306,7 +306,7 @@ def schemas(categorias: list[str]) -> list[dict]:
             "description": (
                 "Consulta status, itens, rastreio e prazos de um pedido. Exige o número do pedido E o e-mail ou telefone "
                 "cadastrados na compra (verificação de identidade, LGPD). Nunca chame sem os dois dados: peça ao cliente. "
-                "Para pedidos entregues, retorna se ainda vale arrependimento (7 dias), troca por defeito (30) e garantia legal (90)."),
+                "Para pedidos entregues, retorna a janela de troca por defeito desde a compra e identifica dados faltantes para arrependimento e garantia."),
             "input_schema": {"type": "object", "properties": {
                 "numero_pedido": {"type": "integer"},
                 "email_ou_telefone": {"type": "string", "description": "E-mail ou telefone do cadastro, informado pelo cliente."}},
@@ -340,7 +340,7 @@ def schemas(categorias: list[str]) -> list[dict]:
         {
             "name": "encaminhar_para_atendente",
             "description": (
-                "Registra o caso e encaminha para a equipe humana (retorno em até 24 horas úteis). Use em reclamações, "
+                "Registra o caso localmente como simulação; não envia à equipe nem garante retorno. Use em reclamações, "
                 "pedidos de devolução/troca/garantia a abrir, problemas que você não resolve, ou quando o cliente pedir "
                 "um humano. Resuma o caso para a equipe não precisar perguntar de novo."),
             "input_schema": {"type": "object", "properties": {

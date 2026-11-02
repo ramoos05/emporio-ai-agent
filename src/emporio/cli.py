@@ -23,6 +23,10 @@ def main(argv: list[str] | None = None) -> int:
         print("Defina ANTHROPIC_API_KEY (veja .env.example).", file=sys.stderr)
         return 1
 
+    if not (args.model or config.MODEL):
+        print("Defina EMPORIO_MODEL no .env com um modelo disponível na sua conta Anthropic.", file=sys.stderr)
+        return 1
+
     import anthropic
 
     from .agent import Agente
