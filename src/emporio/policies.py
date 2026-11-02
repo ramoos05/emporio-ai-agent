@@ -68,6 +68,9 @@ SINONIMOS = {
     "email": ["dados", "empresa", "contato"],
     "dados": ["privacidade", "lgpd"],
     "excluir": ["privacidade", "lgpd", "exclusao"],
+    "apagar": ["excluir", "privacidade", "lgpd", "exclusao"],
+    "deletar": ["excluir", "privacidade", "lgpd", "exclusao"],
+    "remover": ["excluir", "privacidade", "lgpd", "exclusao"],
     "lgpd": ["privacidade", "dados"],
     "garantia": ["defeito", "fabricante", "legal"],
 }
