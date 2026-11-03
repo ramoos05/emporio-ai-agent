@@ -1,9 +1,9 @@
 [project]
 name = "emporio-agent"
 version = "0.1.0"
-description = "Agente de atendimento da Empório da Música (function calling + RAG leve sobre políticas)"
+description = "Atendimento da Empório da Música"
 requires-python = ">=3.11"
-dependencies = ["anthropic>=0.40", "python-dotenv>=1.0", "tzdata>=2025.1"]
+dependencies = ["openai>=1.66,<3", "python-dotenv>=1.0", "tzdata>=2025.1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

@@ -1,1 +1,0 @@
-Os cinco arquivos atuais são exemplos ilustrativos, não execuções do modelo. Execute python scripts/gerar_exemplos.py com chave e modelo configurados para substituí-los por transcrições reais. Revise todas antes de enviar.

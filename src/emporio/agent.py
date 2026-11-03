@@ -9,21 +9,38 @@ from . import config, storage, tools
 from .data import Loja, carregar_loja
 from .prompts import SYSTEM_PROMPT, contexto_temporal
 
-MSG_ERRO = ("Ops, tive um probleminha técnico aqui e não consegui concluir. Pode tentar de novo em instantes? "
+MSG_ERRO = ("Não consegui concluir a consulta. Tente novamente em instantes. "
             "Se preferir, fale com a equipe no WhatsApp (67) 3341-4444.")
-MSG_LIMITE = ("Não consegui fechar isso sozinha agora. Vou deixar com a equipe: chame no WhatsApp "
-              "(67) 3341-4444 em horário comercial, tá?")
+MSG_LIMITE = ("Não consegui concluir essa consulta. Fale com a equipe pelo WhatsApp "
+              "(67) 3341-4444 em horário comercial.")
 
 OnTool = Callable[[str, dict, dict], None]
 
 
-def _bloco_para_dict(b) -> dict:
-    """Converte bloco de conteúdo do SDK em dict mínimo (evita campos extras que a API rejeita ao reenviar)."""
-    if b.type == "text":
-        return {"type": "text", "text": b.text}
-    if b.type == "tool_use":
-        return {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
-    raise ValueError(f"bloco não suportado: {b.type}")
+def _migrar_historico(messages: list[dict]) -> list[dict]:
+    """Converte sessões salvas antes da troca de provedor."""
+    resultado = []
+    for mensagem in messages:
+        conteudo = mensagem.get("content")
+        if not isinstance(conteudo, list) or not any(
+            bloco.get("type") in ("tool_use", "tool_result") for bloco in conteudo
+        ):
+            resultado.append(mensagem)
+            continue
+        if mensagem["role"] == "assistant":
+            resultado.append({
+                "role": "assistant",
+                "content": "\n".join(b["text"] for b in conteudo if b["type"] == "text") or None,
+                "tool_calls": [
+                    {"id": b["id"], "type": "function", "function": {
+                        "name": b["name"], "arguments": json.dumps(b["input"], ensure_ascii=False)}}
+                    for b in conteudo if b["type"] == "tool_use"
+                ],
+            })
+        else:
+            resultado.extend({"role": "tool", "tool_call_id": b["tool_use_id"], "content": b["content"]}
+                             for b in conteudo if b["type"] == "tool_result")
+    return resultado
 
 
 def _eh_texto_do_usuario(m: dict) -> bool:
@@ -40,61 +57,69 @@ class Agente:
         self.on_tool = on_tool
         self.loja = loja or carregar_loja()
         estado = storage.carregar(self.session_id) if persistir else {"messages": [], "falhas_verificacao": 0}
-        self.messages: list[dict] = estado["messages"]
+        self.messages: list[dict] = _migrar_historico(estado["messages"])
         self.ctx = tools.Contexto(loja=self.loja, falhas_verificacao=estado.get("falhas_verificacao", 0))
         self._schemas = tools.schemas(sorted({p.categoria for p in self.loja.produtos.values()}))
 
-    # ---------------------------------------------------------------- público
     def responder(self, texto: str) -> str:
         inicio = len(self.messages)
         self.messages.append({"role": "user", "content": texto})
         try:
             resposta = self._rodar()
         except Exception:  # noqa: BLE001 - qualquer falha de API/rede vira mensagem amigável
-            # desfaz o turno incompleto: não deixar tool_use sem tool_result no histórico
+            # desfaz o turno incompleto: não deixar chamadas sem resultado no histórico
             del self.messages[inicio:]
             return MSG_ERRO
         self._salvar()
         return resposta
 
-    # ---------------------------------------------------------------- interno
     def _janela(self) -> list[dict]:
         msgs = self.messages
         if len(msgs) <= config.MAX_HISTORY_MESSAGES:
             return msgs
         corte = len(msgs) - config.MAX_HISTORY_MESSAGES
-        # começa sempre em uma mensagem de texto do usuário (nunca no meio de um par tool_use/tool_result)
+        # começa sempre em uma mensagem de texto do usuário (nunca no meio de um par de chamada e resultado)
         while corte < len(msgs) and not _eh_texto_do_usuario(msgs[corte]):
             corte += 1
         return msgs[corte:]
 
-    def _sistema(self) -> list[dict]:
-        return [
-            {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": contexto_temporal()},  # dinâmico: fica fora do trecho cacheado
-        ]
+    def _sistema(self) -> str:
+        return f"{SYSTEM_PROMPT}\n\n{contexto_temporal()}"
 
     def _rodar(self) -> str:
         for _ in range(config.MAX_TOOL_STEPS):
-            resp = self.client.messages.create(
-                model=self.model, max_tokens=config.MAX_TOKENS, system=self._sistema(),
-                tools=self._schemas, messages=self._janela(),
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                max_completion_tokens=config.MAX_TOKENS,
+                messages=[{"role": "system", "content": self._sistema()}, *self._janela()],
+                tools=self._schemas,
+                parallel_tool_calls=False,
             )
-            self.messages.append({"role": "assistant", "content": [_bloco_para_dict(b) for b in resp.content
-                                                                    if b.type in ("text", "tool_use")]})
-            usos = [b for b in resp.content if b.type == "tool_use"]
-            if resp.stop_reason != "tool_use" or not usos:
-                return "\n".join(b.text for b in resp.content if b.type == "text").strip() or MSG_ERRO
-            resultados = []
-            for u in usos:
-                saida = tools.executar(self.ctx, u.name, dict(u.input))
+            mensagem = resp.choices[0].message
+            usos = mensagem.tool_calls or []
+            registro = {"role": "assistant", "content": mensagem.content}
+            if usos:
+                registro["tool_calls"] = [
+                    {"id": u.id, "type": "function", "function": {
+                        "name": u.function.name, "arguments": u.function.arguments}}
+                    for u in usos
+                ]
+            self.messages.append(registro)
+            if not usos:
+                resposta = (mensagem.content or "").strip()
+                if not resposta:
+                    raise ValueError("O modelo retornou uma resposta vazia")
+                return resposta
+            for uso in usos:
+                entrada = json.loads(uso.function.arguments)
+                if not isinstance(entrada, dict):
+                    raise ValueError("Os argumentos da ferramenta devem ser um objeto")
+                saida = tools.executar(self.ctx, uso.function.name, entrada)
                 if self.on_tool:
-                    self.on_tool(u.name, dict(u.input), saida)
-                resultados.append({"type": "tool_result", "tool_use_id": u.id,
-                                   "content": json.dumps(saida, ensure_ascii=False)})
-            self.messages.append({"role": "user", "content": resultados})
-        # estourou o limite de rodadas: fecha o histórico de forma consistente
-        self.messages.append({"role": "assistant", "content": [{"type": "text", "text": MSG_LIMITE}]})
+                    self.on_tool(uso.function.name, entrada, saida)
+                self.messages.append({"role": "tool", "tool_call_id": uso.id,
+                                      "content": json.dumps(saida, ensure_ascii=False)})
+        self.messages.append({"role": "assistant", "content": MSG_LIMITE})
         return MSG_LIMITE
 
     def _salvar(self) -> None:

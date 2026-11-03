@@ -14,7 +14,7 @@ DATA_DIR = Path(os.getenv("EMPORIO_DATA_DIR", ROOT / "data"))
 SESSIONS_DIR = Path(os.getenv("EMPORIO_SESSIONS_DIR", ROOT / ".sessions"))
 HANDOFF_FILE = Path(os.getenv("EMPORIO_HANDOFF_FILE", ROOT / ".sessions" / "encaminhamentos.jsonl"))
 
-MODEL = os.getenv("EMPORIO_MODEL", "")
+MODEL = os.getenv("EMPORIO_MODEL", "").strip() or "gpt-4.1-mini"
 MAX_TOKENS = 1024
 MAX_TOOL_STEPS = 6          # limite de rodadas de ferramenta por mensagem do cliente
 MAX_HISTORY_MESSAGES = 40   # janela de histórico enviada ao modelo

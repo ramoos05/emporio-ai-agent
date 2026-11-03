@@ -1,14 +1,18 @@
 # Bia — Empório da Música
 
-Agente Python para o desafio AI Engineer da Artefact. Atende por texto no terminal, com persona informal/profissional, ferramentas para dados estruturados e busca de políticas por seção.
+Python customer-service agent for the Artefact AI Engineer technical challenge. It combines OpenAI function calling, structured CSV queries and section-based retrieval of store policies. The CLI is intentional: the challenge permits a terminal interface and focuses on correct agent behavior.
 
-## Estado da entrega
+## Status and evidence
 
-Código e testes locais incluídos. As cinco conversas em `examples/` são **ilustrativas**, não transcrições do LLM. A execução com API real e a publicação no GitHub ainda precisam ser feitas pelo candidato. O script `scripts/gerar_exemplos.py` grava cinco conversas reais; não grava um cenário que termina em falha técnica. Revise as respostas antes da entrega.
+The candidate ran the OpenAI integration locally and supplied saved conversations. `examples/` contains five actual excerpts from that session, with tool evidence and review notes; these are not five independently executed sessions. Portuguese source transcripts are preserved without rewriting model output. Some responses contain identified issues. The latest prompt revision addresses them, but has not been rerun against a live model here. Automated tests use a simulated client and do not establish LLM answer quality.
 
-## Instalação no Windows (PowerShell)
+Before submission, run `scripts/gerar_exemplos.py`, inspect all five new conversations, and provide English translations for the submission document. The script replaces the excerpts with five fresh scenarios. Do not claim that a failed scenario passed.
 
-Extraia o ZIP, abra a pasta `emporio-final` no VS Code e abra o terminal nessa pasta. Requer Python 3.11+ e Git para publicar.
+## Requirements and setup
+
+Python 3.11+, an OpenAI API key with model access, and Git for publication. Default model: `gpt-4.1-mini`; override using `EMPORIO_MODEL`.
+
+Windows PowerShell, from this directory:
 
 ```powershell
 python -m venv .venv
@@ -16,119 +20,85 @@ python -m venv .venv
 Copy-Item .env.example .env
 ```
 
-Abra `.env` no editor e preencha:
+Edit `.env` locally:
 
 ```dotenv
-ANTHROPIC_API_KEY=sua_chave_da_api
-EMPORIO_MODEL=id_exato_do_modelo_disponivel_na_sua_conta
+OPENAI_API_KEY=your_api_key
+EMPORIO_MODEL=gpt-4.1-mini
 ```
 
-Use um modelo Anthropic que aceite ferramentas. O ID é obrigatório e não possui fallback silencioso. A disponibilidade deve ser conferida na sua conta; é necessário acesso e saldo/limite da API. Não envie a chave ao GitHub nem a inclua em capturas de tela.
+Then run:
 
 ```powershell
-# Testar sem chamar o modelo
 .venv\Scripts\python.exe -m pytest -q
-# Conversar
-.venv\Scripts\python.exe -m emporio
-# Ver as chamadas de ferramentas durante uma demonstração
 .venv\Scripts\python.exe -m emporio --verbose
-# Retomar uma sessão específica
-.venv\Scripts\python.exe -m emporio --session minha-demo
-# Gerar as cinco conversas REAIS exigidas para entregar
 .venv\Scripts\python.exe scripts/gerar_exemplos.py
 ```
 
-`/sair` encerra; `/novo` inicia outra sessão. CLI foi escolhida porque o desafio aceita terminal e prioriza a lógica do agente. Não há necessidade de abrir navegador.
+`/sair` exits; `/novo` starts a new session. `--session demo` resumes that session; `--model MODEL_ID` overrides the model. Verbose output displays tool arguments and results, so only use fictional customer information in demonstrations.
 
-Linux/macOS: use `.venv/bin/python` nos comandos e `cp .env.example .env`.
+On Linux/macOS, replace `.venv\Scripts\python.exe` with `.venv/bin/python` and use `cp .env.example .env`.
 
-## Como funciona
+## Architecture and decisions
 
-1. A CLI recebe a mensagem e carrega o histórico da sessão.
-2. O modelo recebe persona, regras, ferramentas e contexto temporal.
-3. O modelo solicita uma ou mais ferramentas; Python consulta os dados ou calcula valores.
-4. O resultado volta ao modelo para redigir a resposta.
-5. O histórico é salvo localmente. O loop tem limite de seis rodadas e desfaz o turno incompleto em falha de API.
+A customer message enters the CLI. The agent sends the system instructions, recent history and tool schemas to OpenAI Chat Completions. The model selects tools; Python executes them and sends results back. The model then produces a response. The loop is capped at six rounds; incomplete turns are rolled back on API failure.
 
-Arquivos principais:
-
-| Arquivo | Responsabilidade |
+| Module | Responsibility |
 |---|---|
-| `src/emporio/agent.py` | Loop de chamadas ao modelo e ferramentas |
-| `src/emporio/tools.py` | Produtos, pedidos, promoções, políticas, cálculos e registro local |
-| `src/emporio/data.py` | Carga dos CSVs e tratamento dos campos |
-| `src/emporio/policies.py` | Busca lexical nas seções do manual |
-| `src/emporio/prompts.py` | Persona, escopo e regras de comportamento |
-| `src/emporio/storage.py` | Persistência JSON por sessão |
-| `src/emporio/config.py` | Configuração carregada após o `.env` |
+| `agent.py` | OpenAI tool loop, history window and legacy-session migration |
+| `tools.py` | Catalog, promotions, orders, policies, calculations and local handoff |
+| `data.py` | CSV loading, normalization and business data |
+| `policies.py` | Lexical ranking of policy sections |
+| `prompts.py` | Persona, scope, factual constraints and business hours |
+| `config.py` | Environment configuration, loaded after `.env` |
+| `storage.py` | Atomic local JSON session persistence |
+| `cli.py` | Terminal interaction |
 
-## Decisões técnicas
+**Function calling instead of an SQL agent:** seven purpose-specific tools expose only the required operations. No model-generated SQL or Python is executed. A small explicit loop avoids unnecessary orchestration dependencies.
 
-**Function calling:** ferramentas específicas limitam o acesso aos dados e simplificam testes. Não executamos SQL ou código escrito pelo modelo. Não foi necessário LangChain ou um framework de agentes para este loop.
+**OpenAI model:** configurable model with native tools. `gpt-4.1-mini` is the default configuration, not a benchmark winner. Real latency, cost and accuracy must be measured; no comparative benchmark was performed. The Anthropic integration from the earlier version has been replaced.
 
-**Provedor:** API Anthropic por SDK. O modelo é escolhido explicitamente por `EMPORIO_MODEL`; a escolha final e a qualidade precisam ser validadas com as conversas reais. Não houve benchmark de custo/latência. O prompt estático usa cache e o relógio fica em bloco separado.
+**Policy retrieval:** the original PDF and its Markdown transcription are included. Sections are ranked through normalized lexical overlap, lightweight stemming, domain synonyms and title weights. This avoids embeddings and vector infrastructure for a small manual. It may miss unfamiliar paraphrases. Internal sections 7 and 10 are excluded from retrieval; relevant behavioral rules are in the prompt.
 
-**Retrieval:** o PDF original acompanha `data/politicas.md`, uma transcrição dividida em seções. Ranking lexical com normalização, stemming simples, sinônimos e peso de título. Para oito páginas, evita embeddings e infraestrutura adicional. Não é busca semântica; paráfrases podem falhar. Seções internas 7 e 10 são excluídas da busca e suas diretrizes relevantes estão no prompt.
+**Structured data:** CSVs are loaded at startup and cached in memory. They are a historical snapshot, not a live inventory integration. JSON specifications are parsed; product status and stock jointly determine availability. A discontinued or coming-soon product is not sellable even with positive stock. `is_active` determines promotions because validity dates are absent. The highest active promotion wins; PIX does not stack with it.
 
-**Dados:** CSVs carregados em memória. São um snapshot do desafio, não estoque conectado em tempo real. `specs` é convertido de JSON. Produto vendável exige status ativo e estoque positivo. Promoção usa `is_active`; se houver várias ativas, escolhe a maior sem acumular. PIX não acumula com promoção. Preço máximo filtra o preço atual antes do PIX.
+**Conversation state:** local JSON sessions with atomic writes; up to 40 messages are sent to the model, cutting at a customer turn to preserve tool-call/result pairs. Session files contain customer input and tool evidence. They are excluded from delivery and Git.
 
-**Pedidos:** consulta exige número e e-mail/telefone compatível. Retorna primeiro nome e campos do pedido, sem expor cadastro completo. Falhas de verificação têm resposta genérica e bloqueio após três tentativas na mesma sessão. Isso é validação demonstrativa, não autenticação segura; nova sessão pode contornar o limite.
+**Order access:** order number plus matching email/phone is a demonstration-level identity check, not production authentication. Unknown orders and mismatched identity return the same error. Three failed attempts block the current session; starting another session can bypass this limit. Production needs authentication and authorization outside the LLM.
 
-**Pós-venda:** a previsão de entrega nunca é usada como recebimento efetivo. Canal da compra e data real precisam ser perguntados. A ferramenta calcula a janela interna de troca por defeito desde a compra; não conclui automaticamente arrependimento nem garantia. O agente não aprova reembolso ou devolução.
+**Post-sale rules:** estimated delivery never establishes receipt. The agent asks for purchase channel and actual receipt date before confirming cancellation eligibility. Internal 30-day defect exchange is measured from purchase; it does not eliminate the separate warranty. The assistant cannot approve refunds or cancel orders.
 
-**Histórico:** JSON local por sessão, com escrita atômica e janela de contexto de 40 mensagens sem cortar pares de ferramentas. Persistência contém o texto informado pelo cliente e resultados; usar somente dados fictícios na demonstração e apagar sessões quando não forem mais necessárias.
+## Assumptions and limitations
 
-## Ambiguidades e suposições
+- The catalog budget filter uses the current promotional/table price, before PIX.
+- Promotion dates are unavailable: only the active flag is authoritative.
+- Order totals are preserved even if they differ from item sums.
+- Installment rules follow detailed section 3.1: minimum R$50 up to 3 installments, R$80 for 4–6, R$100 for 7–12. This is a documented interpretation of conflicting summary text.
+- Regional shipping covers Campo Grande only because municipalities are not listed. Exactly R$500 is interpreted as R$35 shipping; amounts above R$500 qualify for free shipping. Confirm these interpretations with the business before production.
+- The manual has conflicting contact numbers. This prototype uses (67) 3341-4444 and the email spelling without an accent; the conflict remains a business clarification.
+- Business hours do not include an automatic holiday calendar.
+- Handoff creates a local JSONL record only. It does not notify staff or guarantee a callback. Responses must identify the simulation.
+- Monetary calculations use rounded floats. Production needs Decimal and exact installment reconciliation.
+- Prompt instructions reduce but do not guarantee protection against prompt injection or hallucination.
+- The broad API exception fallback does not expose diagnostic details. Structured, redacted logging would improve troubleshooting.
+- Data is sent to the model provider. Production requires privacy review, data minimization, retention controls and appropriate access protection.
 
-- Promoções não têm datas: somente `is_active` determina vigência.
-- Produto descontinuado ou em breve pode ter estoque positivo: o status prevalece.
-- Total de pedido é preservado mesmo quando diverge da soma dos itens.
-- Parcelamento segue seção 3.1: mínimo de R$50 até 3x, R$80 de 4x a 6x e R$100 de 7x a 12x. Essa é uma interpretação documentada da ambiguidade com a tabela geral.
-- Frete regional considera Campo Grande, pois o manual não lista municípios. Exatamente R$500 foi interpretado como frete de R$35; acima disso, grátis. Confirmar essas suposições com o negócio em produção.
-- Contatos divergentes no manual: adotados telefone (67) 3341-4444 e e-mail sem acento. A divergência deve ser confirmada com a loja.
-- Feriados não estão cadastrados; horário calculado é o regular, sujeito a feriados e exceções.
-- Encaminhamento gera protocolo em arquivo local, sem notificação à equipe. A resposta deve identificar a simulação e não prometer retorno efetivo.
+## Evaluation and follow-up
 
-## Exemplos e validação
+The supplied implementation passed 50 automated tests during review. Tests cover loading, tools, retrieval, mocked OpenAI interaction, persistence, configuration and date regressions. They do not call the real API.
 
-Os cinco cenários cobrem catálogo, informações/preço, arrependimento, falta de estoque/promoção inativa e assuntos fora do escopo. O script usa datas simuladas explícitas para os pedidos históricos. Com a API configurada, ele substitui os exemplos ilustrativos por resultados reais do agente.
+Review of supplied live transcripts found: (1) displayed results confused with total matches; (2) online-purchase qualification omitted from a return response; (3) an outdated delivery estimate presented without explaining its age; and (4) payment summary not distinguishing all installment bands. The revised prompt explicitly addresses these issues. They require a live regression run before claiming resolution.
 
-Antes de enviar: confira preços contra os CSVs, referências das políticas, ausência de desconto acumulado, solicitação dos fatos faltantes na devolução, recusas fora do escopo e comportamento em pedidos inválidos. Uma resposta fluente não comprova correção.
+Future work: a fixed evaluation set with factual checks, authentication independent of the LLM, deterministic return calculations from confirmed dates, Decimal accounting, real handoff notifications, holiday support and privacy-preserving telemetry.
 
-Testes automatizados cobrem dados, ferramentas, políticas, loop simulado, persistência, falhas e regressões de configuração e datas. Não comprovam qualidade do modelo real nem resistência absoluta a prompt injection.
+## AI assistance and provenance
 
-## Limitações e evolução
+The initial supplied version declared Claude Code assistance. ChatGPT/Codex reviewed and revised configuration, post-sale handling, documentation and tests. The candidate supplied a working OpenAI adaptation and live session records. This review preserved those records and identified weaknesses rather than presenting edited answers as actual model output. The candidate should verify this statement and describe their own review and validation work accurately.
 
-Sem integração real de WhatsApp, estoque, transportadora, pagamentos ou equipe humana. Sem login/OTP, criptografia de histórico, métricas de custo ou avaliação automatizada do texto do LLM. Preços usam floats arredondados; em produção migrar para Decimal e conciliação de parcelas. Busca lexical pode devolver correspondências parciais. As mensagens seguem para o provedor do modelo; dados de produção exigiriam revisão de privacidade e minimização.
+## Submission
 
-Próximos passos: validação do modelo com casos reais, autenticação fora do LLM, cálculo determinístico de pós-venda usando datas confirmadas, feriados, notificações reais, telemetria sem dados pessoais e testes adversariais.
+The recruiter email requests English answers and a PDF uploaded through Google Forms. The technical brief also requires a public Git repository and 3–5 example conversations. Submit an English PDF containing the real public repository URL, architecture, decisions, validation and limitations, together with translated conversation evidence. The original store-facing dialogue may be retained in Portuguese alongside translations.
 
-## Uso de IA
+Preserve the Git history and commit further work honestly. Never commit `.env`, `.venv` or private sessions. Create a public empty repository, configure its URL as `origin`, then push `main`. Confirm access from a signed-out browser. Do not modify the repository after the submission deadline.
 
-A versão recebida declara uso de Claude Code na implementação inicial. Esta revisão foi feita com ChatGPT/Codex: revisão do enunciado/código, reprodução de erros, ajustes de configuração e pós-venda, testes e documentação. Não houve credencial de API disponível para executar o modelo real. Os exemplos ilustrativos estão identificados como tal. O candidato deve compreender o código, revisar esta descrição de autoria e acrescentar as validações que efetivamente realizar.
-
-## Publicação e entrega
-
-O ZIP inclui o histórico Git recebido e um commit adicional de revisão, sem reescrever os anteriores. Crie um repositório público vazio no GitHub, sem README automático. Dentro desta pasta:
-
-```powershell
-git status
-git log --oneline
-git remote -v
-```
-
-Se não houver `origin`:
-
-```powershell
-git remote add origin https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
-```
-
-Se já houver `origin`, use `git remote set-url origin URL_DO_SEU_REPOSITORIO`. Depois de gerar e revisar as conversas reais:
-
-```powershell
-git add examples README.md
-git commit -m "Valida agente com modelo real e registra conversas"
-git push -u origin main
-```
-
-Não publique `.env` ou `.sessions`. Confira no GitHub se há 3–5 conversas reais, instruções completas e histórico. Responda ao e-mail do processo com o link público antes do prazo indicado nele; não altere o repositório após a entrega. O ZIP é o pacote de trabalho, não substitui o repositório solicitado.
+The final PDF needs the published repository URL and the results of the latest live validation; those are not available in this package yet.

@@ -280,7 +280,7 @@ def executar(ctx: Contexto, nome: str, argumentos: dict) -> dict:
 
 
 def schemas(categorias: list[str]) -> list[dict]:
-    return [
+    definicoes = [
         {
             "name": "buscar_produtos",
             "description": (
@@ -288,7 +288,7 @@ def schemas(categorias: list[str]) -> list[dict]:
                 "em breve), promoção ativa e especificações. Use SEMPRE antes de falar de preço, disponibilidade ou "
                 "características de qualquer instrumento. Para itens indisponíveis já retorna alternativas. "
                 "Use `categoria` para tipo de instrumento e `consulta` para marca/modelo/características (ex.: 'Takamine GD20', 'nylon')."),
-            "input_schema": {"type": "object", "properties": {
+            "parameters": {"type": "object", "properties": {
                 "consulta": {"type": "string", "description": "Marca, modelo ou palavras-chave. Vazio para listar por filtros."},
                 "categoria": {"type": "string", "enum": categorias, "description": "Categoria do catálogo."},
                 "preco_min": {"type": "number", "description": "Preço mínimo em R$ (considera o preço atual, com promoção)."},
@@ -299,7 +299,7 @@ def schemas(categorias: list[str]) -> list[dict]:
         {
             "name": "listar_promocoes",
             "description": "Lista as promoções ATIVAS agora, com preço original, percentual e preço promocional.",
-            "input_schema": {"type": "object", "properties": {}},
+            "parameters": {"type": "object", "properties": {}},
         },
         {
             "name": "consultar_pedido",
@@ -307,7 +307,7 @@ def schemas(categorias: list[str]) -> list[dict]:
                 "Consulta status, itens, rastreio e prazos de um pedido. Exige o número do pedido E o e-mail ou telefone "
                 "cadastrados na compra (verificação de identidade, LGPD). Nunca chame sem os dois dados: peça ao cliente. "
                 "Para pedidos entregues, retorna a janela de troca por defeito desde a compra e identifica dados faltantes para arrependimento e garantia."),
-            "input_schema": {"type": "object", "properties": {
+            "parameters": {"type": "object", "properties": {
                 "numero_pedido": {"type": "integer"},
                 "email_ou_telefone": {"type": "string", "description": "E-mail ou telefone do cadastro, informado pelo cliente."}},
                 "required": ["numero_pedido", "email_ou_telefone"]},
@@ -318,12 +318,12 @@ def schemas(categorias: list[str]) -> list[dict]:
                 "Busca no manual de políticas da loja: trocas e devoluções, garantia, formas de pagamento e parcelamento, "
                 "frete e prazos, rastreamento, regras de promoção, LGPD, dados da empresa. Use para qualquer regra, prazo "
                 "ou condição. Passe a dúvida do cliente em linguagem natural."),
-            "input_schema": {"type": "object", "properties": {"pergunta": {"type": "string"}}, "required": ["pergunta"]},
+            "parameters": {"type": "object", "properties": {"pergunta": {"type": "string"}}, "required": ["pergunta"]},
         },
         {
             "name": "calcular_parcelamento",
             "description": "Calcula as opções de parcelamento no crédito (respeitando parcela mínima) e o valor no PIX para um valor total.",
-            "input_schema": {"type": "object", "properties": {
+            "parameters": {"type": "object", "properties": {
                 "valor": {"type": "number", "description": "Valor total em R$ (use o preço atual do produto)."},
                 "preco_ja_promocional": {"type": "boolean", "description": "True se o valor já é preço promocional (PIX sem desconto extra)."}},
                 "required": ["valor"]},
@@ -331,7 +331,7 @@ def schemas(categorias: list[str]) -> list[dict]:
         {
             "name": "calcular_frete",
             "description": "Frete e prazo de entrega conforme a cidade e o valor do pedido.",
-            "input_schema": {"type": "object", "properties": {
+            "parameters": {"type": "object", "properties": {
                 "cidade": {"type": "string"},
                 "valor_pedido": {"type": "number"},
                 "contem_item_grande_porte": {"type": "boolean"}},
@@ -343,7 +343,7 @@ def schemas(categorias: list[str]) -> list[dict]:
                 "Registra o caso localmente como simulação; não envia à equipe nem garante retorno. Use em reclamações, "
                 "pedidos de devolução/troca/garantia a abrir, problemas que você não resolve, ou quando o cliente pedir "
                 "um humano. Resuma o caso para a equipe não precisar perguntar de novo."),
-            "input_schema": {"type": "object", "properties": {
+            "parameters": {"type": "object", "properties": {
                 "motivo": {"type": "string", "description": "Ex.: reclamação, devolução, troca por defeito, outro."},
                 "resumo": {"type": "string", "description": "Resumo objetivo do caso, incluindo nº do pedido se houver."},
                 "nome": {"type": "string"},
@@ -351,3 +351,5 @@ def schemas(categorias: list[str]) -> list[dict]:
                 "required": ["motivo", "resumo"]},
         },
     ]
+
+    return [{"type": "function", "function": {**d, "strict": False}} for d in definicoes]

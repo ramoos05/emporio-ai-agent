@@ -1,4 +1,4 @@
-"""Testa o loop do agente com um cliente Anthropic falso (sem rede, sem chave)."""
+"""Testa o loop do agente com um cliente OpenAI falso (sem rede, sem chave)."""
 import copy
 from types import SimpleNamespace as NS
 
@@ -13,14 +13,15 @@ def texto(t):
 
 
 def uso(id_, nome, **inp):
-    return NS(type="tool_use", id=id_, name=nome, input=inp)
+    return NS(type="function", id=id_, function=NS(name=nome, arguments=__import__("json").dumps(inp)))
 
 
 class ClienteFalso:
     def __init__(self, respostas):
         self.respostas = list(respostas)
         self.chamadas = []
-        self.messages = self
+        self.chat = self
+        self.completions = self
 
     def create(self, **kw):
         self.chamadas.append(copy.deepcopy(kw))  # snapshot: o agente muta a lista depois
@@ -31,7 +32,10 @@ class ClienteFalso:
 
 
 def resp(*blocos, stop="end_turn"):
-    return NS(content=list(blocos), stop_reason=stop)
+    return NS(choices=[NS(message=NS(
+        content="\n".join(b.text for b in blocos if b.type == "text") or None,
+        tool_calls=[b for b in blocos if b.type == "function"] or None,
+    ))])
 
 
 def test_fluxo_com_ferramenta():
@@ -43,16 +47,19 @@ def test_fluxo_com_ferramenta():
     assert eventos[0][0] == "buscar_produtos" and eventos[0][1]["produtos"][0]["preco_tabela"] == 2199
     # o 2º envio ao modelo contém o tool_result com o dado real
     ultimo = c.chamadas[1]["messages"][-1]
-    assert ultimo["role"] == "user" and ultimo["content"][0]["type"] == "tool_result"
-    assert "2199" in ultimo["content"][0]["content"]
+    assert ultimo["role"] == "tool" and ultimo["tool_call_id"] == "t1"
+    assert "2199" in ultimo["content"]
 
 
-def test_prompt_do_sistema_tem_cache_e_hora():
+def test_prompt_do_sistema_tem_regras_e_hora():
     c = ClienteFalso([resp(texto("oi"))])
     Agente(c, persistir=False).responder("oi")
-    sistema = c.chamadas[0]["system"]
-    assert sistema[0]["cache_control"] == {"type": "ephemeral"}
-    assert "ABERTA" in sistema[1]["text"] and "sexta-feira" in sistema[1]["text"]
+    sistema = c.chamadas[0]["messages"][0]
+    assert sistema["role"] == "system"
+    assert prompts.SYSTEM_PROMPT in sistema["content"]
+    assert "ABERTA" in sistema["content"] and "sexta-feira" in sistema["content"]
+    assert all(t["type"] == "function" and "parameters" in t["function"]
+               for t in c.chamadas[0]["tools"])
 
 
 def test_persistencia_e_retomada():
@@ -118,3 +125,35 @@ def test_proxima_abertura_domingo_e_segunda():
     assert "segunda-feira, 23/02 às 09h" in t
     t = prompts.contexto_temporal(datetime(2026, 2, 20, 19, tzinfo=config.TZ))
     assert "sábado, 21/02 às 09h" in t
+
+
+def test_migracao_de_sessao_antiga():
+    storage.salvar("antiga", {"messages": [
+        {"role": "user", "content": "promoções?"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "listar_promocoes", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "{}"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Confira as opções."}]},
+    ], "falhas_verificacao": 2})
+    c = ClienteFalso([resp(texto("Certo."))])
+    agente = Agente(c, session_id="antiga")
+    assert agente.ctx.falhas_verificacao == 2
+    assert agente.responder("obrigado") == "Certo."
+    mensagens = c.chamadas[0]["messages"]
+    assert mensagens[2]["tool_calls"][0]["function"]["name"] == "listar_promocoes"
+    assert mensagens[3]["role"] == "tool"
+
+
+def test_argumentos_invalidos_desfazem_turno():
+    chamada = uso("t1", "listar_promocoes")
+    chamada.function.arguments = "{invalido"
+    agente = Agente(ClienteFalso([resp(chamada)]), persistir=False)
+    assert agente.responder("promoções?") == MSG_ERRO
+    assert agente.messages == []
+
+
+def test_resposta_vazia_desfaz_turno():
+    agente = Agente(ClienteFalso([resp()]), persistir=False)
+    assert agente.responder("oi") == MSG_ERRO
+    assert agente.messages == []
